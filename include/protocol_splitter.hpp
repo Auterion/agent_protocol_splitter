@@ -43,6 +43,13 @@
 #include <unistd.h>
 
 #define BUFFER_SIZE 2048
+#define DEFAULT_BAUDRATE 460800
+#define DEFAULT_UART_DEVICE "/dev/ttyUSB0"
+#define DEFAULT_HOST_IP "127.0.0.1"
+#define DEFAULT_MAVLINK_RECV_PORT 5800
+#define DEFAULT_MAVLINK_SEND_PORT 5801
+#define DEFAULT_RTPS_RECV_PORT 5900
+#define DEFAULT_RTPS_SEND_PORT 5901
 
 class DevSerial;
 class Mavlink2Dev;
@@ -58,6 +65,19 @@ struct StaticData {
 };
 
 volatile sig_atomic_t running = true;
+
+struct options {
+	uint32_t baudrate = DEFAULT_BAUDRATE;
+	char uart_device[64] = DEFAULT_UART_DEVICE;
+	char host_ip[16] = DEFAULT_HOST_IP;
+	uint16_t mavlink_udp_recv_port = DEFAULT_MAVLINK_RECV_PORT;
+	uint16_t mavlink_udp_send_port = DEFAULT_MAVLINK_SEND_PORT;
+	uint16_t rtps_udp_recv_port = DEFAULT_RTPS_RECV_PORT;
+	uint16_t rtps_udp_send_port = DEFAULT_RTPS_SEND_PORT;
+	bool sw_flow_control = false;
+	bool hw_flow_control = false;
+	bool verbose_debug = false;
+} _options;
 
 namespace
 {
@@ -79,7 +99,8 @@ public:
 class DevSerial
 {
 public:
-	DevSerial(const char *device_name, const uint32_t baudrate);
+	DevSerial(const char *device_name, const uint32_t baudrate, const bool hw_flow_control,
+		  const bool sw_flow_control);
 	virtual ~DevSerial();
 
 	int	open_uart();
@@ -89,6 +110,8 @@ public:
 
 protected:
 	uint32_t _baudrate;
+	bool _hw_flow_control;
+	bool _sw_flow_control;
 
 	char _uart_name[64] = {};
 	bool baudrate_to_speed(uint32_t bauds, speed_t *speed);

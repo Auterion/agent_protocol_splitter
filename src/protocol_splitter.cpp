@@ -69,8 +69,11 @@ void ReadBuffer::move(void *dest, size_t pos, size_t n)
 	buf_size -= n;
 }
 
-DevSerial::DevSerial(const char *device_name, const uint32_t baudrate)
-	: _baudrate(baudrate)
+DevSerial::DevSerial(const char *device_name, const uint32_t baudrate, const bool hw_flow_control,
+		     const bool sw_flow_control)
+	: _baudrate(baudrate),
+	  _hw_flow_control(hw_flow_control),
+	  _sw_flow_control(sw_flow_control)
 {
 	strncpy(_uart_name, device_name, sizeof(_uart_name));
 }
@@ -105,7 +108,7 @@ int DevSerial::open_uart()
 		// Back up the original uart configuration to restore it after exit
 		if ((termios_state = tcgetattr(_uart_fd, &uart_config)) < 0) {
 			int errno_bkp = errno;
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Error getting config %s: %d (%d)\n\033[0m", _uart_name,
+			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Error getting config %s: %d (%d)\033[0m\n", _uart_name,
 			       termios_state, errno);
 			close();
 			return -errno_bkp;
@@ -123,8 +126,15 @@ int DevSerial::open_uart()
 
 		uart_config.c_lflag &= !(ISIG | ICANON | ECHO | TOSTOP | IEXTEN);
 
-		bool _hw_flow_control = false;
-		bool _sw_flow_control = false;
+		// Flow control
+		if (_hw_flow_control) {
+			// HW flow control
+			uart_config.c_lflag |= CRTSCTS;
+
+		} else if (_sw_flow_control) {
+			// SW flow control
+			uart_config.c_lflag |= (IXON | IXOFF | IXANY);
+		}
 
 		// Set baud rate
 		speed_t speed;
@@ -634,7 +644,8 @@ ssize_t RtpsDev::read()
 
 		// We need at least the first six bytes to get packet len
 		if ((unsigned)i > _in_read_buffer->buf_size - HEADER_SIZE) {
-			_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i), _in_read_buffer->buf_size - (unsigned)i);
+			_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i),
+					      _in_read_buffer->buf_size - (unsigned)i);
 			_in_read_buffer->buf_size -= (unsigned)i;
 			ret = -1;
 			break;
@@ -650,7 +661,8 @@ ssize_t RtpsDev::read()
 
 		// The message won't fit the buffer.
 		if (packet_len > buflen) {
-			_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i + 1), _in_read_buffer->buf_size - (unsigned)(i + 1));
+			_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i + 1),
+					      _in_read_buffer->buf_size - (unsigned)(i + 1));
 			_in_read_buffer->buf_size -= (unsigned)(i + 1);
 			ret = -EMSGSIZE;
 			break;
@@ -659,9 +671,11 @@ ssize_t RtpsDev::read()
 		// we do not have a complete message yet
 		if ((unsigned)i + payload_len + HEADER_SIZE > _in_read_buffer->buf_size) {
 			if (i > 0) {
-				_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i), _in_read_buffer->buf_size - (unsigned)i);
+				_in_read_buffer->move(_in_read_buffer->buffer, (size_t)(_in_read_buffer->buffer + i),
+						      _in_read_buffer->buf_size - (unsigned)i);
 				_in_read_buffer->buf_size -= (unsigned)i;
 			}
+
 			break;
 		}
 
@@ -715,7 +729,8 @@ ssize_t RtpsDev::write()
 
 			// We need at least the first six bytes to get packet len
 			if ((unsigned)i > _out_read_buffer->buf_size - HEADER_SIZE) {
-				_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i), _out_read_buffer->buf_size - (unsigned)i);
+				_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i),
+						       _out_read_buffer->buf_size - (unsigned)i);
 				_out_read_buffer->buf_size -= (unsigned)i;
 				ret = -1;
 				break;
@@ -731,7 +746,8 @@ ssize_t RtpsDev::write()
 
 			// The message won't fit the buffer.
 			if (_packet_len > buflen) {
-				_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i + 1), _out_read_buffer->buf_size - (unsigned)(i + 1));
+				_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i + 1),
+						       _out_read_buffer->buf_size - (unsigned)(i + 1));
 				_out_read_buffer->buf_size -= (unsigned)(i + 1);
 				ret = -EMSGSIZE;
 				break;
@@ -740,9 +756,11 @@ ssize_t RtpsDev::write()
 			// we do not have a complete message yet
 			if ((unsigned)i + payload_len + HEADER_SIZE > _out_read_buffer->buf_size) {
 				if (i > 0) {
-					_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i), _out_read_buffer->buf_size - (unsigned)i);
+					_out_read_buffer->move(_out_read_buffer->buffer, (size_t)(_out_read_buffer->buffer + i),
+							       _out_read_buffer->buf_size - (unsigned)i);
 					_out_read_buffer->buf_size -= (unsigned)i;
 				}
+
 				break;
 			}
 
@@ -812,8 +830,70 @@ void rtps_udp_to_serial(pollfd *fds)
 	}
 }
 
+static void usage(const char *name)
+{
+	printf("usage: %s [options]\n\n"
+	       "  -b <baudrate>			UART device baudrate. Default 460800\n"
+	       "  -d <uart_device>		UART device. Default /dev/ttyUSB0\n"
+	       "  -i <host_ip>			Host IP for UDP. Default 127.0.0.1\n"
+	       "  -w <mavlink_udp_recv_port>	UDP port for receiving. Default 5800\n"
+	       "  -x <mavlink_udp_send_port>	UDP port for receiving. Default 5801\n"
+	       "  -y <rtps_udp_recv_port>	UDP port for receiving. Default 5900\n"
+	       "  -z <rtps_udp_send_port>	UDP port for receiving. Default 5901\n"
+	       "  -f <sw_flow_control>		Activates UART link SW flow control\n"
+	       "  -h <hw_flow_control>		Activates UART link HW flow control\n"
+	       "  -v <verbose_debug>		Add more verbosity\n\n",
+	       name);
+}
+
+static int parse_options(int argc, char **argv)
+{
+	int ch;
+
+	while ((ch = getopt(argc, argv, "b:d:i:w:x:y:z:fghv")) != EOF) {
+		switch (ch) {
+		case 'b': _options.baudrate		  = strtoul(optarg, nullptr, 10);		  break;
+
+		case 'd': if (nullptr != optarg)	strcpy(_options.uart_device, optarg); break;
+
+		case 'i': if (nullptr != optarg)	strcpy(_options.host_ip, optarg);  	  break;
+
+		case 'f': _options.sw_flow_control = true;								  break;
+
+		case 'g': _options.hw_flow_control = true;								  break;
+
+		case 'h': usage(argv[0]); return -1;									  break;
+
+		case 'v': _options.verbose_debug = true;								  break;
+
+		case 'w': _options.mavlink_udp_recv_port  = strtoul(optarg, nullptr, 10); break;
+
+		case 'x': _options.mavlink_udp_send_port  = strtoul(optarg, nullptr, 10); break;
+
+		case 'y': _options.rtps_udp_recv_port     = strtoul(optarg, nullptr, 10); break;
+
+		case 'z': _options.rtps_udp_send_port     = strtoul(optarg, nullptr, 10); break;
+
+		default:
+			usage(argv[0]);
+			return -1;
+		}
+	}
+
+	if (_options.hw_flow_control && _options.sw_flow_control) {
+		printf("\033[0;31m[ protocol__splitter ]\tHW and SW flow control set. Please set only one or another\033[0m\n");
+		return -1;
+	}
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
+	if (-1 == parse_options(argc, argv)) {
+		return -1;
+	}
+
 	objects = new StaticData();
 
 	std::signal(SIGINT, signal_handler);
@@ -823,15 +903,15 @@ int main(int argc, char *argv[])
 	objects->out_read_buffer = new ReadBuffer();
 
 	// Init the serial device
-	// TODO: add arg options to set the dev name, baudrate, etc.
-	objects->serial = new DevSerial("/dev/ttyUSB0", 3000000);
+	objects->serial = new DevSerial(_options.uart_device, _options.baudrate, _options.hw_flow_control,
+					_options.sw_flow_control);
 	int uart_fd = objects->serial->open_uart();
 
 	// Init UDP sockets for Mavlink and RTPS
-	// TODO: add arg options to set the UDP IP and ports
-	objects->mavlink2 = new Mavlink2Dev(objects->in_read_buffer, objects->out_read_buffer, "127.0.0.1", 5800, 5801,
-					    uart_fd);
-	objects->rtps = new RtpsDev(objects->in_read_buffer, objects->out_read_buffer, "127.0.0.1", 5900, 5901, uart_fd);
+	objects->mavlink2 = new Mavlink2Dev(objects->in_read_buffer,
+					    objects->out_read_buffer, _options.host_ip, _options.mavlink_udp_recv_port, _options.mavlink_udp_send_port, uart_fd);
+	objects->rtps = new RtpsDev(objects->in_read_buffer,
+				    objects->out_read_buffer, _options.host_ip, _options.rtps_udp_recv_port, _options.rtps_udp_send_port, uart_fd);
 
 	// Init fd polling
 	// pollfd fds[3];
@@ -842,14 +922,8 @@ int main(int argc, char *argv[])
 	// for (size_t i = 0; i <= sizeof(fds) / sizeof(fds[0]); i++) {
 	// 	fds[i].events = POLLIN;
 	// }
-	//
-	// !stop_all = true;
-	//
-	// std::thread mavlink_serial_to_udp_th(mavlink_serial_to_udp, fds);
-	// std::thread rtps_serial_to_udp_th(rtps_serial_to_udp, fds);
-	// std::thread mavlink_udp_to_serial_th(mavlink_udp_to_serial, fds);
-	// std::thread rtps_udp_to_serial_th(mavlink_udp_to_serial, fds);
 
+	// Init fd polling
 	pollfd fd_uart[1];
 	pollfd fds_udp_mavlink[1];
 	pollfd fds_udp_rtps[1];
@@ -882,6 +956,8 @@ int main(int argc, char *argv[])
 	delete objects->out_read_buffer;
 	delete objects;
 	objects = nullptr;
+
+	printf("\033[1;33m[ protocol__splitter ]\tEXITING...\033[0m\n");
 
 	return 0;
 }

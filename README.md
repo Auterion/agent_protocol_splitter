@@ -27,7 +27,22 @@ Make sure to have the UART link up and the cabling right (if using an TTL-USB ad
 Run the splitter using:
 
 ```sh
-$ protocol_splitter #TODO add options
+$ protocol_splitter [options]
+```
+
+Options available:
+
+```sh
+  -b <baudrate>			UART device baudrate. Default 460800
+  -d <uart_device>		UART device. Default /dev/ttyUSB0
+  -i <host_ip>			Host IP for UDP. Default 127.0.0.1
+  -w <mavlink_udp_recv_port>	UDP port for receiving. Default 5800
+  -x <mavlink_udp_send_port>	UDP port for receiving. Default 5801
+  -y <rtps_udp_recv_port>	UDP port for receiving. Default 5900
+  -z <rtps_udp_send_port>	UDP port for receiving. Default 5901
+  -f <sw_flow_control>		Activates UART link SW flow control
+  -h <hw_flow_control>		Activates UART link HW flow control
+  -v <verbose_debug>		Add more verbosity
 ```
 
 At the same time, the `protocol_splitter` should also be run in the client side, so the stream can be multiplexed bidirectionally.
