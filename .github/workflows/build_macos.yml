@@ -1,0 +1,25 @@
+name: Build in MacOS
+
+on:
+  push:
+    branches:
+    - 'master'
+    tags:
+    - '*'
+  pull_request:
+    branches:
+    - '*'
+
+jobs:
+  build:
+    name: ${{ matrix.os }} build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-10.15, macos-11.0]
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build
+      run: |
+        cmake -Bbuild -S.
+        cmake --build build -j`nproc --all`
