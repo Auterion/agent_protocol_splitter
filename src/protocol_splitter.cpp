@@ -33,8 +33,8 @@
 #include <protocol_splitter.hpp>
 
 #include <atomic>
-#include <thread>
 #include <mutex>
+#include <thread>
 
 std::mutex mtx;
 
@@ -138,15 +138,8 @@ int DevSerial::open_uart()
 		bool flush = false;
 
 		while (0 < ::read(_uart_fd, (void *)&aux, 64)) {
-			flush = true;
+			printf("[ protocol__splitter ]\tSerial link: Flushed\n");
 			usleep(1000);
-		}
-
-		if (flush) {
-			printf("[ protocol__splitter ]\tSerial link: Flush\n");
-
-		} else {
-			printf("[ protocol__splitter ]\tSerial link: No flush\n");
 		}
 	}
 
@@ -268,7 +261,7 @@ ssize_t DevSerial::read()
 	int ret = 0;
 	size_t i = 0;
 	uint16_t packet_len, payload_len;
-	uint8_t type;
+	Sp2Header_t *header;
 
 	if (_buf_size == BUFFER_SIZE) {
 		_buf_size = 0;
@@ -276,9 +269,11 @@ ssize_t DevSerial::read()
 	}
 
 	ret = ::read(_uart_fd, _buffer + _buf_size, BUFFER_SIZE - _buf_size);
+
 	if (ret < 0) {
 		printf("\033[0;31m[ protocol__splitter ]\tSerial link: UART receive error: %d\033[0m\n", ret);
 		return ret;
+
 	} else if (ret == 0) {
 		return ret;
 	}
@@ -286,20 +281,24 @@ ssize_t DevSerial::read()
 	_buf_size += ret;
 
 	ret = 0;
+
 	// Search for a packet on buffer to send it
 	while (_buf_size - i >= Sp2HeaderSize) {
-		while ( _buf_size - i >= Sp2HeaderSize &&
-				((_buffer[i] != Sp2HeaderMagic) || ((_buffer[i + 1] ^ _buffer[i + 2]) != _buffer[i + 3])) )
-		{
+		while (_buf_size - i >= Sp2HeaderSize &&
+		       (((Sp2Header_t *) &_buffer[i])->magic != Sp2HeaderMagic
+			|| ((Sp2Header_t *) &_buffer[i])->checksum != (_buffer[i + 1] ^ _buffer[i + 2])
+		       )) {
 			i++;
 		}
+
 		// We need at least the first <Sp2HeaderSize> bytes to get packet header
 		if (i > _buf_size - Sp2HeaderSize) {
 			ret = -1;
 			break;
 		}
-		type = _buffer[i + 1] & 0x80;
-		payload_len = (uint16_t) (_buffer[i + 1] & 0x7f) << 8 | _buffer[i + 2];
+
+		header = (Sp2Header_t *)&_buffer[i];
+		payload_len = ((uint16_t)header->len_h << 8) | header->len_l;
 		packet_len = payload_len + Sp2HeaderSize;
 
 		// packet is bigger than what we've read, better luck next time
@@ -309,24 +308,26 @@ ssize_t DevSerial::read()
 		}
 
 		// Write to UDP port
-		if (type == MessageType::Mavlink) {
-			objects->mavlink2->udp_write(_buffer+i+Sp2HeaderSize, payload_len);
-		} else if (type == MessageType::Rtps) {
-			objects->rtps->udp_write(_buffer+i+Sp2HeaderSize, payload_len);
+		if (header->type == MessageType::Mavlink) {
+			objects->mavlink2->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
+
+		} else if (header->type == MessageType::Rtps) {
+			objects->rtps->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
+
 		} else {
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Unknown message type %d received \033[0m\n", type);
+			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Unknown message type %u received \033[0m\n", header->type);
 		}
 
 		// Jump over the handled packet
 		i += packet_len;
 		ret += packet_len;
-
 	}
 
 	if (i < _buf_size) {
 		// Last message not complete, save it
 		memmove(_buffer, _buffer + i, _buf_size - i);
 		_buf_size = _buf_size - i;
+
 	} else {
 		// All data handled, clean up buffer
 		_buf_size = 0;
@@ -342,13 +343,19 @@ DevSocket::DevSocket(const char *udp_ip, const uint16_t udp_port_recv,
 	, _udp_fd(-1)
 	, _udp_port_recv(udp_port_recv)
 	, _udp_port_send(udp_port_send)
-	, _type(type)
 {
 	if (nullptr != udp_ip) {
 		strcpy(_udp_ip, udp_ip);
 	}
 
-	open_udp();
+	// Init the header
+	_header.magic		= Sp2HeaderMagic;
+	_header.len_h		= 0;
+	_header.len_l		= 0;
+	_header.checksum	= 0;
+	_header.type		= type;
+
+	open_udp(type);
 }
 
 DevSocket::~DevSocket()
@@ -364,7 +371,7 @@ DevSocket::~DevSocket()
 	}
 }
 
-int DevSocket::open_udp()
+int DevSocket::open_udp(const MessageType type)
 {
 	// Init receiver
 	if ((_udp_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
@@ -382,19 +389,23 @@ int DevSocket::open_udp()
 	_outaddr.sin_port = htons(_udp_port_send);
 	_outaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 
-	printf("[ protocol__splitter ]\tUDP socket link: Trying to connect...\n");
+	const std::string msg_type = type == MessageType::Mavlink ? "MAVLink" : "RTPS";
 
 	if (bind(_udp_fd, (struct sockaddr *)&_inaddr, sizeof(_inaddr)) < 0) {
-		printf("\033[0;31m[ protocol__splitter ]\tUDP socket link: Bind failed\033[0m\n");
+		printf("\033[0;31m[ protocol__splitter ]\tUDP socket link for %s: Bind failed\033[0m\n", msg_type.c_str());
 		return -1;
 	}
 
-	printf("[ protocol__splitter ]\tUDP socket link: Connected to server!\n");
+	printf("[ protocol__splitter ]\tUDP socket link for %s: receiving from remote through port %u...\n", msg_type.c_str(),
+	       static_cast<unsigned int>(_udp_port_recv));
 
 	if (inet_aton(_udp_ip, &_outaddr.sin_addr) == 0) {
-		printf("\033[0;31m[ protocol__splitter ]\tUDP socket link: inet_aton() failed\033[0m\n");
+		printf("\033[0;31m[ protocol__splitter ]\tUDP socket link for %s: inet_aton() failed\033[0m\n", msg_type.c_str());
 		return -1;
 	}
+
+	printf("[ protocol__splitter ]\tUDP socket link for %s: sending to remote through port %u...\n", msg_type.c_str(),
+	       static_cast<unsigned int>(_udp_port_send));
 
 	return 0;
 }
@@ -419,11 +430,14 @@ ssize_t DevSocket::udp_read(void *buffer, size_t len)
 
 	int ret = 0;
 	socklen_t addrlen = sizeof(_outaddr);
+
 	if (ntohs(_outaddr.sin_port) == 0) {
 		ret = recvfrom(_udp_fd, buffer, len, 0, (struct sockaddr *) &_outaddr, &addrlen);
+
 	} else {
 		ret = recv(_udp_fd, buffer, len, 0);
 	}
+
 	return ret;
 }
 
@@ -450,10 +464,11 @@ ssize_t DevSocket::write()
 		return payload_len;
 	}
 
-	_buffer[0] = (uint8_t) Sp2HeaderMagic;
-	_buffer[1] = (uint8_t) (_type & 0x80) | ((payload_len >> 8) & 0x7f);
-	_buffer[2] = (uint8_t) (payload_len & 0xff);
-	_buffer[3] = _buffer[1] ^ _buffer[2]; // Checksum
+	_header.len_h = (payload_len >> 8) & 0x7f;
+	_header.len_l = (payload_len & 0xff);
+	_header.checksum = _buffer[1] ^ _buffer[2]; // Checksum
+
+	memmove(_buffer, &_header, Sp2HeaderSize);
 
 	packet_len = payload_len + Sp2HeaderSize;
 
@@ -577,13 +592,15 @@ int main(int argc, char *argv[])
 	int uart_fd = objects->serial->open_uart();
 
 	// Init UDP sockets for Mavlink and RTPS
-	objects->mavlink2 = new DevSocket(_options.host_ip, _options.mavlink_udp_recv_port, _options.mavlink_udp_send_port, uart_fd, MessageType::Mavlink);
-	objects->rtps = new DevSocket(_options.host_ip, _options.rtps_udp_recv_port, _options.rtps_udp_send_port, uart_fd, MessageType::Rtps);
+	objects->mavlink2 = new DevSocket(_options.host_ip, _options.mavlink_udp_recv_port, _options.mavlink_udp_send_port,
+					  uart_fd, MessageType::Mavlink);
+	objects->rtps = new DevSocket(_options.host_ip, _options.rtps_udp_recv_port, _options.rtps_udp_send_port, uart_fd,
+				      MessageType::Rtps);
 
 	// Init fd polling
-	pollfd fd_uart[1]{};
-	pollfd fds_udp_mavlink[1]{};
-	pollfd fds_udp_rtps[1]{};
+	pollfd fd_uart[1] {};
+	pollfd fds_udp_mavlink[1] {};
+	pollfd fds_udp_rtps[1] {};
 
 	fd_uart[0].fd = uart_fd;
 	fd_uart[0].events = POLLIN;
@@ -610,7 +627,7 @@ int main(int argc, char *argv[])
 	delete objects;
 	objects = nullptr;
 
-	printf("\033[1;33m[ protocol__splitter ]\tEXITING...\033[0m\n");
+	printf("\033[1;33m[ protocol__splitter ]\tExiting...\033[0m\n");
 
 	return 0;
 }

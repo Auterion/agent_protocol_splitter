@@ -32,12 +32,12 @@
 
 #include <arpa/inet.h>
 #include <cassert>
+#include <cerrno>
 #include <csignal>
-#include <errno.h>
+#include <cstdio>
+#include <cstring>
 #include <fcntl.h>
 #include <poll.h>
-#include <stdio.h>
-#include <string.h>
 #include <sys/socket.h>
 #include <termios.h>
 #include <unistd.h>
@@ -61,29 +61,33 @@ struct StaticData {
 };
 
 /*
-struct Sp2Header {
-	char magic;                // 'S'
-	uint8_t type:1;            // 0=MAVLINK, 1=RTPS
-	uint16_t payload_len:15;   // Length
-	uint8_t checksum;          // XOR of two above bytes
-}
+MessageType is in MSB of header[1]
+		|
+		v
+	Mavlink 0000 0000b
+	Rtps    1000 0000b
+*/
+enum MessageType {Mavlink = 0x00, Rtps = 0x01};
 
+const char  Sp2HeaderMagic = 'S';
+const int   Sp2HeaderSize  = 4;
+
+/*
+Header Structure:
      bits:   1 2 3 4 5 6 7 8
 header[0] - |     Magic     |
 header[1] - |T|   LenH      |
 header[2] - |     LenL      |
 header[3] - |   Checksum    |
-
-MessageType is in MSB of header[1]
-            |
-            v
-    Mavlink 0000 0000b
-    Rtps    1000 0000b
 */
-enum MessageType {
-	Mavlink = 0x00,
-	Rtps    = 0x80
-};
+typedef struct __attribute__((packed))
+{
+	char magic;                // 'S'
+	uint8_t len_h:	7,         // Length MSB
+		 type:	1;         // 0=MAVLINK, 1=RTPS
+	uint8_t len_l;             // Length LSB
+	uint8_t checksum;          // XOR of two above bytes
+} Sp2Header_t;
 
 volatile sig_atomic_t running = true;
 
@@ -103,10 +107,6 @@ struct options {
 namespace
 {
 static StaticData *objects = nullptr;
-
-const char Sp2HeaderMagic = 'S';
-const int  Sp2HeaderSize  = 4;
-
 }
 
 
@@ -145,15 +145,13 @@ public:
 
 	int close(int udp_fd);
 	ssize_t	write();
-	int	open_udp();
+	int	open_udp(const MessageType type);
 	ssize_t udp_write(void *buffer, size_t len);
 
 	int _uart_fd;
 	int _udp_fd;
 
 protected:
-
-	MessageType _type;
 	char _udp_ip[16] = {};
 
 	uint16_t _udp_port_recv;
@@ -163,7 +161,7 @@ protected:
 
 	char _buffer[BUFFER_SIZE];
 
+	Sp2Header_t _header;
 private:
 	ssize_t udp_read(void *buffer, size_t len);
-
 };
