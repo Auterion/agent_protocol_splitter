@@ -31,25 +31,28 @@
  ****************************************************************************/
 
 #include <arpa/inet.h>
-#include <cassert>
-#include <cerrno>
+#include <atomic>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <mutex>
 #include <poll.h>
-#include <sys/socket.h>
 #include <termios.h>
+#include <thread>
 #include <unistd.h>
 
-#define BUFFER_SIZE 2048
-#define DEFAULT_BAUDRATE 460800
-#define DEFAULT_UART_DEVICE "/dev/ttyUSB0"
-#define DEFAULT_HOST_IP "127.0.0.1"
-#define DEFAULT_MAVLINK_RECV_PORT 5800
-#define DEFAULT_MAVLINK_SEND_PORT 5801
-#define DEFAULT_RTPS_RECV_PORT 5900
-#define DEFAULT_RTPS_SEND_PORT 5901
+
+#define BUFFER_SIZE			2048
+#define DEFAULT_BAUDRATE 		460800
+#define DEFAULT_UART_DEVICE		"/dev/ttyUSB0"
+#define DEFAULT_HOST_IP			"127.0.0.1"
+#define DEFAULT_PASSTHROUGH_TIMEOUT_MS	3000
+#define DEFAULT_MAVLINK_RECV_PORT	5800
+#define DEFAULT_MAVLINK_SEND_PORT	5801
+#define DEFAULT_RTPS_RECV_PORT		5900
+#define DEFAULT_RTPS_SEND_PORT		5901
 
 class DevSerial;
 class DevSocket;
@@ -86,13 +89,14 @@ typedef union __attribute__((packed))
 	struct {
 		char magic;                // 'S'
 		uint8_t len_h:	7,         // Length MSB
-			type:	1;         // 0=MAVLINK, 1=RTPS
+			 type:	1;         // 0=MAVLINK, 1=RTPS
 		uint8_t len_l;             // Length LSB
 		uint8_t checksum;          // XOR of two above bytes
 	} fields;
 } Sp2Header_t;
 
-volatile sig_atomic_t running = true;
+// Signal to stop threads
+volatile sig_atomic_t running{true};
 
 struct options {
 	uint32_t baudrate = DEFAULT_BAUDRATE;
@@ -102,6 +106,7 @@ struct options {
 	uint16_t mavlink_udp_send_port = DEFAULT_MAVLINK_SEND_PORT;
 	uint16_t rtps_udp_recv_port = DEFAULT_RTPS_RECV_PORT;
 	uint16_t rtps_udp_send_port = DEFAULT_RTPS_SEND_PORT;
+	uint64_t passthrough_timeout_ms = DEFAULT_PASSTHROUGH_TIMEOUT_MS;
 	bool sw_flow_control = false;
 	bool hw_flow_control = false;
 	bool verbose_debug = false;
@@ -112,30 +117,41 @@ namespace
 static StaticData *objects = nullptr;
 }
 
+// Flag to change to MAVLink pass-through mode
+std::atomic<bool> mavlink_passthrough{false};
+
+// UDP write mutex
+std::mutex socket_write_mtx;
 
 class DevSerial
 {
 public:
 	DevSerial(const char *device_name, const uint32_t baudrate, const bool hw_flow_control,
-		  const bool sw_flow_control);
+		  const bool sw_flow_control, const double passthrough_timeout_ms);
 	virtual ~DevSerial();
 
 	ssize_t	read();
 	int	open_uart();
 	int	close();
 
-	int _uart_fd = -1;
+	int _uart_fd{-1};
+
+	std::chrono::time_point<std::chrono::system_clock> _timer_start;
 
 protected:
 	uint32_t _baudrate;
 	bool _hw_flow_control;
 	bool _sw_flow_control;
 
-	char _uart_name[64] = {};
+	const uint64_t _passthrough_timeout_ms;
+	bool _mavlink_passthrough_noticed{false};
+	bool _protocol_splitter_header_found{false};
+
+	char _uart_name[64] {};
 	bool baudrate_to_speed(uint32_t bauds, speed_t *speed);
 
-	uint8_t _buffer[BUFFER_SIZE] = {};
-	size_t _buf_size = 0;
+	uint8_t _buffer[BUFFER_SIZE] {};
+	size_t _buf_size{0};
 private:
 };
 
@@ -152,17 +168,17 @@ public:
 	ssize_t udp_write(void *buffer, size_t len);
 
 	int _uart_fd;
-	int _udp_fd;
+	int _udp_fd{-1};
 
 protected:
-	char _udp_ip[16] = {};
+	char _udp_ip[16] {};
 
 	uint16_t _udp_port_recv;
 	uint16_t _udp_port_send;
 	struct sockaddr_in _outaddr;
 	struct sockaddr_in _inaddr;
 
-	char _buffer[BUFFER_SIZE];
+	char _buffer[BUFFER_SIZE] {};
 
 	Sp2Header_t _header;
 private:

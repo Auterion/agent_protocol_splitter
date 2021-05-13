@@ -32,18 +32,13 @@
 
 #include <protocol_splitter.hpp>
 
-#include <atomic>
-#include <mutex>
-#include <thread>
-
-std::mutex mtx;
-
 
 DevSerial::DevSerial(const char *device_name, const uint32_t baudrate, const bool hw_flow_control,
-		     const bool sw_flow_control)
+		     const bool sw_flow_control, const double passthrough_timeout_ms)
 	: _baudrate(baudrate),
 	  _hw_flow_control(hw_flow_control),
-	  _sw_flow_control(sw_flow_control)
+	  _sw_flow_control(sw_flow_control),
+	  _passthrough_timeout_ms(passthrough_timeout_ms)
 {
 	strncpy(_uart_name, device_name, sizeof(_uart_name));
 }
@@ -282,6 +277,24 @@ ssize_t DevSerial::read()
 
 	ret = 0;
 
+	// Enable MAVLink passthrough in case no RTPS/MAVLink packets were parsed,
+	// which usually means that the protocol splitter on the FMU is not being
+	// used and so no protocol splitter header is being used
+	if (mavlink_passthrough.load()) {
+		if (!_mavlink_passthrough_noticed) {
+			printf("\033[1;33m[ protocol__splitter ]\tSerial link: Changed to MAVLink passthrough as no protocol splitter headers were parsed\033[0m\n");
+			_mavlink_passthrough_noticed = true;
+		}
+
+		objects->mavlink2->udp_write(_buffer, _buf_size);
+		ret += _buf_size;
+
+		// All data handled, clean up buffer
+		_buf_size = 0;
+
+		return ret;
+	}
+
 	// Search for a packet on buffer to send it
 	while (_buf_size - i >= Sp2HeaderSize) {
 		while (_buf_size - i >= Sp2HeaderSize &&
@@ -309,13 +322,16 @@ ssize_t DevSerial::read()
 
 		// Write to UDP port
 		if (header->fields.type == MessageType::Mavlink) {
+			_protocol_splitter_header_found = true;
 			objects->mavlink2->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
 
 		} else if (header->fields.type == MessageType::Rtps) {
+			_protocol_splitter_header_found = true;
 			objects->rtps->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
 
 		} else {
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Unknown message type %u received \033[0m\n", header->fields.type);
+			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Unknown message type %u received \033[0m\n",
+			       header->fields.type);
 		}
 
 		// Jump over the handled packet
@@ -333,6 +349,16 @@ ssize_t DevSerial::read()
 		_buf_size = 0;
 	}
 
+	// Wait for X seconds without receiving any protocol splitter headers in order
+	// to change to MAVLink passthrough mode. This is only applicable in the beginning,
+	// when the first data is received, in order to verify if there are protocol
+	// splitter headers being sent through the protocol splitter in the FMU side.
+	if (!_protocol_splitter_header_found &&
+	    (std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now() - _timer_start).count() >=
+	     _passthrough_timeout_ms)) {
+		mavlink_passthrough.store(true);
+	}
+
 	return ret;
 }
 
@@ -340,7 +366,6 @@ ssize_t DevSerial::read()
 DevSocket::DevSocket(const char *udp_ip, const uint16_t udp_port_recv,
 		     const uint16_t udp_port_send, int uart_fd, MessageType type)
 	: _uart_fd(uart_fd)
-	, _udp_fd(-1)
 	, _udp_port_recv(udp_port_recv)
 	, _udp_port_send(udp_port_send)
 {
@@ -464,15 +489,22 @@ ssize_t DevSocket::write()
 		return payload_len;
 	}
 
-	_header.fields.len_h = ((payload_len >> 8) & 0x7f);
-	_header.fields.len_l = (payload_len & 0xff);
-	_header.fields.checksum = _header.bytes[1] ^ _header.bytes[2]; // Checksum
+	// Do not add the protocol splitter header if in MAVLink passthrough mode
+	if (!mavlink_passthrough.load()) {
+		_header.fields.len_h = ((payload_len >> 8) & 0x7f);
+		_header.fields.len_l = (payload_len & 0xff);
+		_header.fields.checksum = _header.bytes[1] ^ _header.bytes[2]; // Checksum
+	}
 
 	// Write to UART port
-	std::unique_lock<std::mutex> guard(mtx);
-	packet_len = ::write(_uart_fd, _header.bytes, Sp2HeaderSize);
+	std::unique_lock<std::mutex> write_guard(socket_write_mtx);
+
+	if (!mavlink_passthrough.load()) {
+		packet_len = ::write(_uart_fd, _header.bytes, Sp2HeaderSize);
+	}
+
 	packet_len += ::write(_uart_fd, _buffer, payload_len);
-	guard.unlock();
+	write_guard.unlock();
 
 	return packet_len;
 }
@@ -488,6 +520,11 @@ void serial_to_udp(pollfd *fds)
 {
 	while (running) {
 		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
+			// Start the timer for the pass-through activation on timeout at the first data poll
+			if (objects->serial->_timer_start == std::chrono::time_point<std::chrono::system_clock>()) {
+				objects->serial->_timer_start = std::chrono::system_clock::now();
+			}
+
 			objects->serial->read();
 		}
 	}
@@ -505,7 +542,8 @@ void mavlink_udp_to_serial(pollfd *fds)
 void rtps_udp_to_serial(pollfd *fds)
 {
 	while (running) {
-		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
+		// If in MAVLink pass-through mode, do not start RTPS write to serial from UDP
+		if (!mavlink_passthrough.load() && (::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->rtps->write();
 		}
 	}
@@ -517,14 +555,17 @@ static void usage(const char *name)
 	       "  -b <baudrate>			UART device baudrate. Default 460800\n"
 	       "  -d <uart_device>		UART device. Default /dev/ttyUSB0\n"
 	       "  -i <host_ip>			Host IP for UDP. Default 127.0.0.1\n"
-	       "  -w <mavlink_udp_recv_port>	UDP port for receiving. Default 5800.\n"
+	       "  -w <mavlink_udp_recv_port>	UDP port for receiving. Default: 5800.\n"
 	       "                            	 Set 0 to autoselect.\n"
-	       "  -x <mavlink_udp_send_port>	UDP port for receiving. Default 5801.\n"
+	       "  -x <mavlink_udp_send_port>	UDP port for receiving. Default: 5801.\n"
 	       "                            	 Set 0 to get source port.\n"
-	       "  -y <rtps_udp_recv_port>	UDP port for receiving. Default 5900.\n"
+	       "  -y <rtps_udp_recv_port>	UDP port for receiving. Default: 5900.\n"
 	       "                         	 Set 0 to autoselect.\n"
-	       "  -z <rtps_udp_send_port>	UDP port for receiving. Default 5901\n"
+	       "  -z <rtps_udp_send_port>	UDP port for receiving. Default: 5901\n"
 	       "                         	 Set 0 to get source port.\n"
+	       "  -t <passthrough_timeout>	Time to wait for protocol splitter headers\n"
+	       "                         	 before changing to a pass-through mode\n"
+	       "                         	 for MAVLink. Defaults to 3 seconds.\n"
 	       "  -f <sw_flow_control>		Activates UART link SW flow control\n"
 	       "  -g <hw_flow_control>		Activates UART link HW flow control\n"
 	       "  -v <verbose_debug>		Add more verbosity\n\n",
@@ -535,29 +576,31 @@ static int parse_options(int argc, char **argv)
 {
 	int ch;
 
-	while ((ch = getopt(argc, argv, "b:d:i:w:x:y:z:fghv")) != EOF) {
+	while ((ch = getopt(argc, argv, "b:d:i:t:w:x:y:z:fghv")) != EOF) {
 		switch (ch) {
-		case 'b': _options.baudrate		  = strtoul(optarg, nullptr, 10);		  break;
+		case 'b': _options.baudrate			= strtoul(optarg, nullptr, 10);		break;
 
-		case 'd': if (nullptr != optarg)	strcpy(_options.uart_device, optarg); break;
+		case 'd': if (nullptr != optarg)		strcpy(_options.uart_device, optarg);	break;
 
-		case 'i': if (nullptr != optarg)	strcpy(_options.host_ip, optarg);  	  break;
+		case 'i': if (nullptr != optarg)		strcpy(_options.host_ip, optarg);	break;
 
-		case 'f': _options.sw_flow_control = true;								  break;
+		case 'f': _options.sw_flow_control		= true;					break;
 
-		case 'g': _options.hw_flow_control = true;								  break;
+		case 'g': _options.hw_flow_control		= true;					break;
 
-		case 'h': usage(argv[0]); return -1;									  break;
+		case 'h': usage(argv[0]);			return -1;				break;
 
-		case 'v': _options.verbose_debug = true;								  break;
+		case 't': _options.passthrough_timeout_ms	= strtoul(optarg, nullptr, 10);		break;
 
-		case 'w': _options.mavlink_udp_recv_port  = strtoul(optarg, nullptr, 10); break;
+		case 'v': _options.verbose_debug		= true;					break;
 
-		case 'x': _options.mavlink_udp_send_port  = strtoul(optarg, nullptr, 10); break;
+		case 'w': _options.mavlink_udp_recv_port	= strtoul(optarg, nullptr, 10);		break;
 
-		case 'y': _options.rtps_udp_recv_port     = strtoul(optarg, nullptr, 10); break;
+		case 'x': _options.mavlink_udp_send_port	= strtoul(optarg, nullptr, 10);		break;
 
-		case 'z': _options.rtps_udp_send_port     = strtoul(optarg, nullptr, 10); break;
+		case 'y': _options.rtps_udp_recv_port		= strtoul(optarg, nullptr, 10);		break;
+
+		case 'z': _options.rtps_udp_send_port		= strtoul(optarg, nullptr, 10);		break;
 
 		default:
 			usage(argv[0]);
@@ -585,7 +628,7 @@ int main(int argc, char *argv[])
 
 	// Init the serial device
 	objects->serial = new DevSerial(_options.uart_device, _options.baudrate, _options.hw_flow_control,
-					_options.sw_flow_control);
+					_options.sw_flow_control, _options.passthrough_timeout_ms);
 	int uart_fd = objects->serial->open_uart();
 
 	// Init UDP sockets for Mavlink and RTPS
