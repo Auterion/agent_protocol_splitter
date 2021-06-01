@@ -54,7 +54,7 @@ int DevSerial::open_uart()
 {
 	// Open a serial port, if not opened already
 	if (_uart_fd < 0) {
-		_uart_fd = open(_uart_name, O_RDWR | O_NOCTTY | O_NONBLOCK);
+		_uart_fd = open(_uart_name, O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
 
 		if (_uart_fd < 0) {
 			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Failed to open device: %s (%d)\033[0m\n", _uart_name, errno);
@@ -79,17 +79,23 @@ int DevSerial::open_uart()
 			return -errno_bkp;
 		}
 
-		// Set up the UART for non-canonical binary communication: 8 bits, 1 stop bit, no parity.
-		uart_config.c_iflag &= !(INPCK | ISTRIP | INLCR | IGNCR | ICRNL | IXON | IXANY | IXOFF);
-		uart_config.c_iflag |= IGNBRK | IGNPAR;
+		uart_config.c_iflag &= ~(IGNBRK | BRKINT | ICRNL | INLCR | PARMRK | INPCK | ISTRIP | IXON);
+		uart_config.c_oflag &= ~(OCRNL | ONLCR | ONLRET | ONOCR | OFILL | OPOST);
 
-		uart_config.c_oflag &= !(OPOST | ONLCR | OCRNL | ONOCR | ONLRET | OFILL | NLDLY | VTDLY);
-		uart_config.c_oflag |= NL0 | VT0;
+		uart_config.c_lflag &= ~(ECHO | ECHOE | ECHOK | ECHOCTL | ECHOKE | ECHONL | ICANON | IEXTEN | ISIG);
 
-		uart_config.c_cflag &= !(CSIZE | CSTOPB | PARENB);
-		uart_config.c_cflag |= CS8 | CREAD | CLOCAL;
+		// never send SIGTTOU
+		uart_config.c_lflag &= ~(TOSTOP);
 
-		uart_config.c_lflag &= !(ISIG | ICANON | ECHO | TOSTOP | IEXTEN);
+		// ignore modem control lines
+		uart_config.c_cflag |= CLOCAL;
+
+		// 8 bits
+		uart_config.c_cflag |= CS8;
+
+		// use epoll to get notification of available bytes
+		uart_config.c_cc[VMIN] = 0;
+		uart_config.c_cc[VTIME] = 0;
 
 		// Flow control
 		if (_hw_flow_control) {
@@ -126,11 +132,33 @@ int DevSerial::open_uart()
 			return -errno_bkp;
 		}
 
+#ifdef __linux__
+		// For Linux, set high speed polling at the chip level. Since this routine relies on a USB latency
+		// change at the chip level it may fail on certain chip sets if their driver does not support this
+		// configuration request
+		{
+			struct serial_struct serial_ctl;
+
+			if (ioctl(_uart_fd, TIOCGSERIAL, &serial_ctl) < 0) {
+				printf("\033[0;31m[ protocol__splitter ]\tError while trying to read serial port configuration: %d\033[0m\n", errno);
+				goto set_latency_failed;
+			}
+
+			serial_ctl.flags |= ASYNC_LOW_LATENCY;
+
+			if (ioctl(_uart_fd, TIOCSSERIAL, &serial_ctl) < 0) {
+				int errno_bkp = errno;
+				printf("\033[0;31m[ protocol__splitter ]\tError while trying to write serial port latency: %d\033[0m\n", errno);
+				close();
+				return -errno_bkp;
+			}
+		}
+#endif
+
 		printf("[ protocol__splitter ]\tSerial link: device: %s; baudrate: %d; flow_control: %s\n",
 		       _uart_name, _baudrate, _sw_flow_control ? "SW enabled" : (_hw_flow_control ? "HW enabled" : "No"));
 
 		char aux[64];
-		bool flush = false;
 
 		while (0 < ::read(_uart_fd, (void *)&aux, 64)) {
 			printf("[ protocol__splitter ]\tSerial link: Flushed\n");
@@ -139,6 +167,21 @@ int DevSerial::open_uart()
 	}
 
 	return _uart_fd;
+
+#ifdef __linux__
+set_latency_failed:
+
+	if (ioctl(_uart_fd, TCFLSH, TCIOFLUSH) == -1) {
+		printf("\033[0;31m[ protocol__splitter ]\tCould not flush terminal\033[0m\n");
+		close();
+		return -errno;
+	}
+
+	printf("[ protocol__splitter ]\tSerial link: device: %s; baudrate: %d; flow_control: %s\n",
+	       _uart_name, _baudrate, _sw_flow_control ? "SW enabled" : (_hw_flow_control ? "HW enabled" : "No"));
+
+	return _uart_fd;
+#endif
 }
 
 bool DevSerial::baudrate_to_speed(uint32_t bauds, speed_t *speed)

@@ -29,6 +29,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  ****************************************************************************/
+#pragma once
 
 #include <arpa/inet.h>
 #include <atomic>
@@ -39,10 +40,14 @@
 #include <fcntl.h>
 #include <mutex>
 #include <poll.h>
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <thread>
 #include <unistd.h>
 
+#ifdef __linux__
+#include <linux/serial.h>
+#endif
 
 #define BUFFER_SIZE			2048
 #define DEFAULT_BAUDRATE 		460800
