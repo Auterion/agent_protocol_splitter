@@ -57,7 +57,7 @@ int DevSerial::open_uart()
 		_uart_fd = open(_uart_name, O_RDWR | O_NONBLOCK | O_CLOEXEC | O_NOCTTY);
 
 		if (_uart_fd < 0) {
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Failed to open device: %s (%d)\033[0m\n", _uart_name, errno);
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: Failed to open device: %s (%d)\033[0m\n", _uart_name, errno);
 			return -errno;
 		}
 
@@ -73,7 +73,7 @@ int DevSerial::open_uart()
 		// Back up the original uart configuration to restore it after exit
 		if ((termios_state = tcgetattr(_uart_fd, &uart_config)) < 0) {
 			int errno_bkp = errno;
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Error getting config %s: %d (%d)\033[0m\n", _uart_name,
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: Error getting config %s: %d (%d)\033[0m\n", _uart_name,
 			       termios_state, errno);
 			close();
 			return -errno_bkp;
@@ -111,7 +111,7 @@ int DevSerial::open_uart()
 		speed_t speed;
 
 		if (!baudrate_to_speed(_baudrate, &speed)) {
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Error setting baudrate %s: Unsupported baudrate: %d\n\tsupported examples:\n\t9600, 19200, 38400, 57600, 115200, 230400, 460800, 500000, 921600, 1000000\033[0m\n",
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: Error setting baudrate %s: Unsupported baudrate: %d\n\tsupported examples:\n\t9600, 19200, 38400, 57600, 115200, 230400, 460800, 500000, 921600, 1000000\033[0m\n",
 			       _uart_name, _baudrate);
 			close();
 			return -EINVAL;
@@ -119,7 +119,7 @@ int DevSerial::open_uart()
 
 		if (cfsetispeed(&uart_config, speed) < 0 || cfsetospeed(&uart_config, speed) < 0) {
 			int errno_bkp = errno;
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Error setting baudrate %s: %d (%d)\033[0m\n", _uart_name,
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: Error setting baudrate %s: %d (%d)\033[0m\n", _uart_name,
 			       termios_state, errno);
 			close();
 			return -errno_bkp;
@@ -127,7 +127,7 @@ int DevSerial::open_uart()
 
 		if ((termios_state = tcsetattr(_uart_fd, TCSANOW, &uart_config)) < 0) {
 			int errno_bkp = errno;
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: ERR SET CONF %s (%d)\033[0m\n", _uart_name, errno);
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: ERR SET CONF %s (%d)\033[0m\n", _uart_name, errno);
 			close();
 			return -errno_bkp;
 		}
@@ -155,13 +155,13 @@ int DevSerial::open_uart()
 		}
 #endif
 
-		printf("[ protocol__splitter ]\tSerial link: device: %s; baudrate: %d; flow_control: %s\n",
+		printf("[ protocol__splitter ]\tUART link: device: %s; baudrate: %d; flow_control: %s\n",
 		       _uart_name, _baudrate, _sw_flow_control ? "SW enabled" : (_hw_flow_control ? "HW enabled" : "No"));
 
 		char aux[64];
 
 		while (0 < ::read(_uart_fd, (void *)&aux, 64)) {
-			printf("[ protocol__splitter ]\tSerial link: Flushed\n");
+			printf("[ protocol__splitter ]\tUART link: Flushed\n");
 			usleep(1000);
 		}
 	}
@@ -177,7 +177,7 @@ set_latency_failed:
 		return -errno;
 	}
 
-	printf("[ protocol__splitter ]\tSerial link: device: %s; baudrate: %d; flow_control: %s\n",
+	printf("[ protocol__splitter ]\tUART link: device: %s; baudrate: %d; flow_control: %s\n",
 	       _uart_name, _baudrate, _sw_flow_control ? "SW enabled" : (_hw_flow_control ? "HW enabled" : "No"));
 
 	return _uart_fd;
@@ -286,7 +286,7 @@ bool DevSerial::baudrate_to_speed(uint32_t bauds, speed_t *speed)
 int DevSerial::close()
 {
 	if (_uart_fd >= 0) {
-		printf("\033[1;33m[ protocol__splitter ]\tSerial link: Closed serial port!\033[0m\n");
+		printf("\033[1;33m[ protocol__splitter ]\tUART link: Closed serial port!\033[0m\n");
 		::close(_uart_fd);
 		_uart_fd = -1;
 	}
@@ -303,13 +303,13 @@ ssize_t DevSerial::read()
 
 	if (_buf_size == BUFFER_SIZE) {
 		_buf_size = 0;
-		printf("\033[0;31m[ protocol__splitter ]\tSerial link: receive buffer overflow - Flushing\033[0m\n");
+		printf("\033[0;31m[ protocol__splitter ]\tUART link: receive buffer overflow - Flushing\033[0m\n");
 	}
 
 	ret = ::read(_uart_fd, _buffer + _buf_size, BUFFER_SIZE - _buf_size);
 
 	if (ret < 0) {
-		printf("\033[0;31m[ protocol__splitter ]\tSerial link: UART receive error: %d\033[0m\n", ret);
+		printf("\033[0;31m[ protocol__splitter ]\tUART link: UART receive error: %d\033[0m\n", ret);
 		return ret;
 
 	} else if (ret == 0) {
@@ -325,7 +325,7 @@ ssize_t DevSerial::read()
 	// used and so no protocol splitter header is being used
 	if (mavlink_passthrough.load()) {
 		if (!_mavlink_passthrough_noticed) {
-			printf("\033[1;33m[ protocol__splitter ]\tSerial link: Changed to MAVLink passthrough as no protocol splitter headers were parsed\033[0m\n");
+			printf("\033[1;33m[ protocol__splitter ]\tUART link: Changed to MAVLink passthrough as no protocol splitter headers were parsed\033[0m\n");
 			_mavlink_passthrough_noticed = true;
 		}
 
@@ -373,7 +373,7 @@ ssize_t DevSerial::read()
 			objects->rtps->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
 
 		} else {
-			printf("\033[0;31m[ protocol__splitter ]\tSerial link: Unknown message type %u received \033[0m\n",
+			printf("\033[0;31m[ protocol__splitter ]\tUART link: Unknown message type %u received \033[0m\n",
 			       header->fields.type);
 		}
 
@@ -540,7 +540,7 @@ ssize_t DevSocket::write()
 	}
 
 	// Write to UART port
-	std::unique_lock<std::mutex> write_guard(socket_write_mtx);
+	std::unique_lock<std::mutex> write_guard(uart_mtx);
 
 	if (!mavlink_passthrough.load()) {
 		packet_len = ::write(_uart_fd, _header.bytes, Sp2HeaderSize);
@@ -559,16 +559,50 @@ void signal_handler(int signum)
 	running = false;
 }
 
-void serial_to_udp(pollfd *fds)
+void serial_to_udp(pollfd *fd_uart)
 {
 	while (running) {
-		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
-			// Start the timer for the pass-through activation on timeout at the first data poll
-			if (objects->serial->_timer_start == std::chrono::time_point<std::chrono::system_clock>()) {
-				objects->serial->_timer_start = std::chrono::system_clock::now();
+		const int ret = ::poll(fd_uart, sizeof(fd_uart) / sizeof(fd_uart[0]), 1000);
+
+		if (ret <= 0) {
+			// In case of a poll timeout or error, try to reopen the UART fd
+			//
+			// This is also done for timeouts as it was being verified for the case of
+			// the MAVLink passthrough, on some specific platforms, the UART poll was
+			// always timing out.
+			//
+			// @todo revisit the UART configs to understand why the timeout happens
+			if (ret == 0) {
+				printf("\033[1;33m[ protocol__splitter ]\tUART link: Poll timeout. ");
+
+			} else {
+				printf("\033[1;33m[ protocol__splitter ]\tUART link: Poll error (%d). ", ret);
 			}
 
-			objects->serial->read();
+			printf("Re-opening UART link and resetting fds...\033[0m\n");
+
+			std::unique_lock<std::mutex> uart_guard(uart_mtx);
+			objects->serial->close();
+
+			const int uart_fd = objects->serial->open_uart();
+			objects->rtps->_uart_fd = uart_fd;
+			objects->mavlink2->_uart_fd = uart_fd;
+			uart_guard.unlock();
+
+			fd_uart[0].fd = uart_fd;
+			fd_uart[0].events = POLLIN;
+
+			sleep(1);
+
+		} else {
+			if (fd_uart[0].revents & POLLIN) {
+				// Start the timer for the pass-through activation on timeout at the first data poll
+				if (objects->serial->_timer_start == std::chrono::time_point<std::chrono::system_clock>()) {
+					objects->serial->_timer_start = std::chrono::system_clock::now();
+				}
+
+				objects->serial->read();
+			}
 		}
 	}
 }
@@ -672,7 +706,7 @@ int main(int argc, char *argv[])
 	// Init the serial device
 	objects->serial = new DevSerial(_options.uart_device, _options.baudrate, _options.hw_flow_control,
 					_options.sw_flow_control, _options.passthrough_timeout_ms);
-	int uart_fd = objects->serial->open_uart();
+	const int uart_fd = objects->serial->open_uart();
 
 	// Init UDP sockets for Mavlink and RTPS
 	objects->mavlink2 = new DevSocket(_options.host_ip, _options.mavlink_udp_recv_port, _options.mavlink_udp_send_port,
@@ -682,23 +716,23 @@ int main(int argc, char *argv[])
 
 	// Init fd polling
 	pollfd fd_uart[1] {};
-	pollfd fds_udp_mavlink[1] {};
-	pollfd fds_udp_rtps[1] {};
+	pollfd fd_udp_mavlink[1] {};
+	pollfd fd_udp_rtps[1] {};
 
 	fd_uart[0].fd = uart_fd;
 	fd_uart[0].events = POLLIN;
 
-	fds_udp_mavlink[0].fd = objects->mavlink2->_udp_fd;
-	fds_udp_mavlink[0].events = POLLIN;
+	fd_udp_mavlink[0].fd = objects->mavlink2->_udp_fd;
+	fd_udp_mavlink[0].events = POLLIN;
 
-	fds_udp_rtps[0].fd = objects->rtps->_udp_fd;
-	fds_udp_rtps[0].events = POLLIN;
+	fd_udp_rtps[0].fd = objects->rtps->_udp_fd;
+	fd_udp_rtps[0].events = POLLIN;
 
 	running = true;
 
 	std::thread serial_to_udp_th(serial_to_udp, fd_uart);
-	std::thread rtps_udp_to_serial_th(rtps_udp_to_serial, fds_udp_rtps);
-	std::thread mavlink_udp_to_serial_th(mavlink_udp_to_serial, fds_udp_mavlink);
+	std::thread rtps_udp_to_serial_th(rtps_udp_to_serial, fd_udp_rtps);
+	std::thread mavlink_udp_to_serial_th(mavlink_udp_to_serial, fd_udp_mavlink);
 
 	serial_to_udp_th.join();
 	mavlink_udp_to_serial_th.join();

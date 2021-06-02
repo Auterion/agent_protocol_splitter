@@ -125,8 +125,8 @@ static StaticData *objects = nullptr;
 // Flag to change to MAVLink pass-through mode
 std::atomic<bool> mavlink_passthrough{false};
 
-// UDP write mutex
-std::mutex socket_write_mtx;
+// UART fd access mutex
+std::mutex uart_mtx;
 
 class DevSerial
 {
