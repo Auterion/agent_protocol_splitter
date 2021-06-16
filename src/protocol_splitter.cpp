@@ -291,6 +291,9 @@ int DevSerial::close()
 		_uart_fd = -1;
 	}
 
+	fflush(stdout);
+	fflush(stderr);
+
 	return 0;
 }
 
@@ -487,6 +490,9 @@ int DevSocket::close(int udp_fd)
 		udp_fd = -1;
 	}
 
+	fflush(stdout);
+	fflush(stderr);
+
 	return 0;
 }
 
@@ -604,6 +610,8 @@ void serial_to_udp(pollfd *fd_uart)
 				objects->serial->read();
 			}
 		}
+		fflush(stdout);
+		fflush(stderr);
 	}
 }
 
@@ -613,6 +621,8 @@ void mavlink_udp_to_serial(pollfd *fds)
 		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->mavlink2->write();
 		}
+		fflush(stdout);
+		fflush(stderr);
 	}
 }
 
@@ -623,6 +633,8 @@ void rtps_udp_to_serial(pollfd *fds)
 		if (!mavlink_passthrough.load() && (::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->rtps->write();
 		}
+		fflush(stdout);
+		fflush(stderr);
 	}
 }
 
@@ -728,6 +740,9 @@ int main(int argc, char *argv[])
 	fd_udp_rtps[0].fd = objects->rtps->_udp_fd;
 	fd_udp_rtps[0].events = POLLIN;
 
+	fflush(stdout);
+	fflush(stderr);
+
 	running = true;
 
 	std::thread serial_to_udp_th(serial_to_udp, fd_uart);
@@ -745,6 +760,8 @@ int main(int argc, char *argv[])
 	objects = nullptr;
 
 	printf("\033[1;33m[ protocol__splitter ]\tExiting...\033[0m\n");
+	fflush(stdout);
+	fflush(stderr);
 
 	return 0;
 }
