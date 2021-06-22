@@ -345,7 +345,7 @@ ssize_t DevSerial::read()
 	while (_buf_size - i >= Sp2HeaderSize) {
 		while (_buf_size - i >= Sp2HeaderSize &&
 		       (((Sp2Header_t *) &_buffer[i])->fields.magic != Sp2HeaderMagic
-			|| ((Sp2Header_t *) &_buffer[i])->fields.checksum != (_buffer[i + 1] ^ _buffer[i + 2])
+			|| ((Sp2Header_t *) &_buffer[i])->fields.checksum != (_buffer[i] ^ _buffer[i + 1] ^ _buffer[i + 2])
 		       )) {
 			i++;
 		}
@@ -359,6 +359,12 @@ ssize_t DevSerial::read()
 		header = (Sp2Header_t *)&_buffer[i];
 		payload_len = ((uint16_t)header->fields.len_h << 8) | header->fields.len_l;
 		packet_len = payload_len + Sp2HeaderSize;
+
+		// invalid packet received
+		if (payload_len == 0) {
+			ret = -1;
+			break;
+		}
 
 		// packet is bigger than what we've read, better luck next time
 		if (i + packet_len > _buf_size) {
@@ -542,7 +548,7 @@ ssize_t DevSocket::write()
 	if (!mavlink_passthrough.load()) {
 		_header.fields.len_h = ((payload_len >> 8) & 0x7f);
 		_header.fields.len_l = (payload_len & 0xff);
-		_header.fields.checksum = _header.bytes[1] ^ _header.bytes[2]; // Checksum
+		_header.fields.checksum = _header.bytes[0] ^ _header.bytes[1] ^ _header.bytes[2]; // Checksum
 	}
 
 	// Write to UART port
@@ -610,6 +616,7 @@ void serial_to_udp(pollfd *fd_uart)
 				objects->serial->read();
 			}
 		}
+
 		fflush(stdout);
 		fflush(stderr);
 	}
@@ -621,6 +628,7 @@ void mavlink_udp_to_serial(pollfd *fds)
 		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->mavlink2->write();
 		}
+
 		fflush(stdout);
 		fflush(stderr);
 	}
@@ -633,6 +641,7 @@ void rtps_udp_to_serial(pollfd *fds)
 		if (!mavlink_passthrough.load() && (::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->rtps->write();
 		}
+
 		fflush(stdout);
 		fflush(stderr);
 	}

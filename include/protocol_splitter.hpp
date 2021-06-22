@@ -96,7 +96,7 @@ typedef union __attribute__((packed))
 		uint8_t len_h:	7,         // Length MSB
 			 type:	1;         // 0=MAVLINK, 1=RTPS
 		uint8_t len_l;             // Length LSB
-		uint8_t checksum;          // XOR of two above bytes
+		uint8_t checksum;          // XOR of the three bytes above
 	} fields;
 } Sp2Header_t;
 
