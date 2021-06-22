@@ -93,10 +93,6 @@ int DevSerial::open_uart()
 		// 8 bits
 		uart_config.c_cflag |= CS8;
 
-		// use epoll to get notification of available bytes
-		uart_config.c_cc[VMIN] = 0;
-		uart_config.c_cc[VTIME] = 0;
-
 		// Flow control
 		if (_hw_flow_control) {
 			// HW flow control
