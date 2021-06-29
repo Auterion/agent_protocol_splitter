@@ -632,9 +632,9 @@ void mavlink_udp_to_serial(pollfd *fds)
 
 void rtps_udp_to_serial(pollfd *fds)
 {
-	while (running) {
-		// If in MAVLink pass-through mode, do not start RTPS write to serial from UDP
-		if (!mavlink_passthrough.load() && (::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
+	// If in MAVLink pass-through mode, do not poll from UDP andwrite to serial
+	while (running && !mavlink_passthrough.load()) {
+		if ((::poll(fds, sizeof(fds) / sizeof(fds[0]), 100) > 0) && (fds[0].revents & POLLIN)) {
 			objects->rtps->write();
 		}
 
