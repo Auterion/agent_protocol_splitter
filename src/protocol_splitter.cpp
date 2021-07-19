@@ -153,13 +153,6 @@ int DevSerial::open_uart()
 
 		printf("[ protocol__splitter ]\tUART link: device: %s; baudrate: %d; flow_control: %s\n",
 		       _uart_name, _baudrate, _sw_flow_control ? "SW enabled" : (_hw_flow_control ? "HW enabled" : "No"));
-
-		char aux[64];
-
-		while (0 < ::read(_uart_fd, (void *)&aux, 64)) {
-			printf("[ protocol__splitter ]\tUART link: Flushed\n");
-			usleep(1000);
-		}
 	}
 
 	return _uart_fd;
