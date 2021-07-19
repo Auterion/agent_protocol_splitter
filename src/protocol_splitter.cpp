@@ -46,6 +46,7 @@ DevSerial::DevSerial(const char *device_name, const uint32_t baudrate, const boo
 DevSerial::~DevSerial()
 {
 	if (_uart_fd >= 0) {
+		tcflush(_uart_fd, TCIOFLUSH);
 		close();
 	}
 }
