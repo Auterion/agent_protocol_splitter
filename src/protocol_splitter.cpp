@@ -97,11 +97,15 @@ int DevSerial::open_uart()
 		// Flow control
 		if (_hw_flow_control) {
 			// HW flow control
-			uart_config.c_lflag |= CRTSCTS;
-
+			uart_config.c_cflag |= CRTSCTS;
+			uart_config.c_iflag &= ~(IXON | IXOFF | IXANY);
 		} else if (_sw_flow_control) {
 			// SW flow control
+			uart_config.c_cflag &= ~CRTSCTS;
 			uart_config.c_lflag |= (IXON | IXOFF | IXANY);
+		} else {
+			uart_config.c_cflag &= ~CRTSCTS;
+			uart_config.c_iflag &= ~(IXON | IXOFF | IXANY);
 		}
 
 		// Set baud rate
@@ -566,22 +570,9 @@ void serial_to_udp(pollfd *fd_uart)
 	while (running) {
 		const int ret = ::poll(fd_uart, sizeof(fd_uart) / sizeof(fd_uart[0]), 1000);
 
-		if (ret <= 0) {
-			// In case of a poll timeout or error, try to reopen the UART fd
-			//
-			// This is also done for timeouts as it was being verified for the case of
-			// the MAVLink passthrough, on some specific platforms, the UART poll was
-			// always timing out.
-			//
-			// @todo revisit the UART configs to understand why the timeout happens
-			if (ret == 0) {
-				printf("\033[1;33m[ protocol__splitter ]\tUART link: Poll timeout. ");
-
-			} else {
-				printf("\033[1;33m[ protocol__splitter ]\tUART link: Poll error (%d). ", ret);
-			}
-
-			printf("Re-opening UART link and resetting fds...\033[0m\n");
+		if (ret < 0) {
+			// In case of a poll error, try to reopen the UART fd
+			printf("\033[1;33m[ protocol__splitter ]\tUART link: Poll error (%d). Re-opening UART link and resetting fds...\033[0m\n", ret);
 
 			std::unique_lock<std::mutex> uart_guard(uart_mtx);
 			objects->serial->close();
