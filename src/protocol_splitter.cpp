@@ -655,7 +655,7 @@ static int parse_options(int argc, char **argv)
 {
 	int ch;
 
-	while ((ch = getopt(argc, argv, "b:d:i:t:w:x:y:z:fghv")) != EOF) {
+	while ((ch = getopt(argc, argv, "b:d:i:t:w:x:y:z:fghvm")) != EOF) {
 		switch (ch) {
 		case 'b': _options.baudrate			= strtoul(optarg, nullptr, 10);		break;
 
@@ -668,6 +668,8 @@ static int parse_options(int argc, char **argv)
 		case 'g': _options.hw_flow_control		= true;					break;
 
 		case 'h': usage(argv[0]);			return -1;				break;
+
+		case 'm': _options.mavlink_passthrough_enable = true; 					break;
 
 		case 't': _options.passthrough_timeout_ms	= strtoul(optarg, nullptr, 10);		break;
 
@@ -695,11 +697,21 @@ static int parse_options(int argc, char **argv)
 	return 0;
 }
 
+static void parse_env_variables()
+{
+    if (const char* var = getenv("PROTOCOL_SPLITTER_PASSTHROUGH_ENABLE")) {
+		_options.mavlink_passthrough_enable = !strcmp(var, "1");
+		printf("\033[1;33m[ protocol__splitter ]\tEnvironment variables: mavlink passthrough enabled\033[0m\n");
+    }
+}
+
 int main(int argc, char *argv[])
 {
 	if (-1 == parse_options(argc, argv)) {
 		return -1;
 	}
+
+	parse_env_variables();
 
 	objects = new StaticData();
 
@@ -734,6 +746,7 @@ int main(int argc, char *argv[])
 	fflush(stderr);
 
 	running = true;
+	mavlink_passthrough.store(_options.mavlink_passthrough_enable);
 
 	std::thread serial_to_udp_th(serial_to_udp, fd_uart);
 	std::thread rtps_udp_to_serial_th(rtps_udp_to_serial, fd_udp_rtps);
