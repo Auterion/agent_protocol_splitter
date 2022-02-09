@@ -115,6 +115,7 @@ struct options {
 	bool sw_flow_control = false;
 	bool hw_flow_control = false;
 	bool verbose_debug = false;
+	bool mavlink_passthrough_enable = false;
 } _options;
 
 namespace
