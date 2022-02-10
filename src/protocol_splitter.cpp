@@ -366,14 +366,18 @@ ssize_t DevSerial::read()
 			break;
 		}
 
-		// Write to UDP port
-		if (header->fields.type == MessageType::Mavlink) {
-			_protocol_splitter_header_found = true;
-			objects->mavlink2->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
+		const auto packet_start_ptr = _buffer + i + Sp2HeaderSize;
 
-		} else if (header->fields.type == MessageType::Rtps) {
+		// Write to UDP port
+		if (header->fields.type == MessageType::Mavlink &&
+				(/*mavlink 2: */ *(packet_start_ptr + 1) == 0xFD ||
+				 /*mavlink 1: */ *(packet_start_ptr + 1) == 0xFE)) {
 			_protocol_splitter_header_found = true;
-			objects->rtps->udp_write(_buffer + i + Sp2HeaderSize, payload_len);
+			objects->mavlink2->udp_write(packet_start_ptr, payload_len);
+
+		} else if (header->fields.type == MessageType::Rtps && memcmp(packet_start_ptr + 1, ">>>", 3) == 0) {
+			_protocol_splitter_header_found = true;
+			objects->rtps->udp_write(packet_start_ptr, payload_len);
 
 		} else {
 			printf("\033[0;31m[ protocol__splitter ]\tUART link: Unknown message type %u received \033[0m\n",
