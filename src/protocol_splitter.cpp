@@ -669,7 +669,7 @@ static int parse_options(int argc, char **argv)
 
 		case 'h': usage(argv[0]);			return -1;				break;
 
-		case 'm': _options.mavlink_passthrough_enable = true; 					break;
+		case 'm': _options.mavlink_passthrough_enable	= true; 				break;
 
 		case 't': _options.passthrough_timeout_ms	= strtoul(optarg, nullptr, 10);		break;
 
