@@ -567,8 +567,18 @@ void signal_handler(int signum)
 
 void serial_to_udp(pollfd *fd_uart)
 {
+	std::chrono::time_point<std::chrono::system_clock> start_time = std::chrono::system_clock::now();
+	bool mavlink_sleep_done = false;
 	while (running) {
 		const int ret = ::poll(fd_uart, sizeof(fd_uart) / sizeof(fd_uart[0]), 1000);
+
+		auto now = std::chrono::system_clock::now();
+		if(!mavlink_sleep_done && std::chrono::duration_cast<std::chrono::milliseconds>(now - start_time).count() >= 60000) {
+			printf("!!!!!!!!!!!!!!!!!!! sleep mavlink\n");
+			sleep(3);
+			mavlink_sleep_done = true;
+		}
+
 
 		if (ret < 0) {
 			// In case of a poll error, try to reopen the UART fd
