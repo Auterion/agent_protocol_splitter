@@ -49,7 +49,7 @@
 #include <linux/serial.h>
 #endif
 
-#define BUFFER_SIZE			2048
+#define BUFFER_SIZE			280*3 // Maximum MAVLink message length, three times
 #define DEFAULT_BAUDRATE 		460800
 #define DEFAULT_UART_DEVICE		"/dev/ttyUSB0"
 #define DEFAULT_HOST_IP			"127.0.0.1"
